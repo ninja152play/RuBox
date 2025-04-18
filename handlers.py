@@ -2,6 +2,7 @@ import requests
 import os
 from dotenv import load_dotenv
 from datetime import datetime, timezone
+from loguru import logger
 
 
 load_dotenv()
@@ -13,7 +14,9 @@ INTERVAL_SYNCHRONISATION_MINUTES = int(os.getenv("INTERVAL_SYNCHRONISATION_MINUT
 
 def check_folder_and_execution_of_works(dir_skan, cloud):
     """Проверяет нахождение новых файлов в указанной директории и создает копии в облачном хранилище или удаляет лишние файлы в облачном хранилище."""
+    logger.info(f"Проверка директории {dir_skan} на наличие новых файлов или удаление лишних файлов в облачном хранилище.")
     if not os.path.exists(dir_skan):
+        logger.error(f"Директория {dir_skan} не найдена.")
         return
     subdir = os.path.relpath(dir_skan, DIR_SKAN) if dir_skan != DIR_SKAN else None
 
@@ -29,7 +32,7 @@ def check_folder_and_execution_of_works(dir_skan, cloud):
         for f in files_only
         if '.' in f and not f.startswith('.')
     ]
-
+    logger.info(f"Получение информации о файлах в облачном хранилище.")
     cloud_response = cloud.get_in_dir(subdir) or []
 
     cloud_files = [
@@ -79,27 +82,27 @@ def check_folder_and_execution_of_works(dir_skan, cloud):
 
     local_only = set(local_files_map) - set(cloud_files_map)
     if local_only:
+        logger.info(f"Найдены новые файлы в директории {dir_skan}: {local_only}")
         for file_name in local_only:
-            print(f"Загрузка файла {file_name} в облако из локальной папки {dir_skan}")
+            logger.info(f"Загрузка файла {file_name} в облако из локальной папки {dir_skan}")
             upload = cloud.upload_to_cloud(os.path.join(dir_skan, file_name), file_name, subdir)
             if upload:
-                print(f"Файл {file_name} успешно загружен в облако")
+                logger.info(f"Файл {file_name} успешно загружен в облако")
 
     cloud_only = set(cloud_files_map) - set(local_files_map)
     if cloud_only:
+        logger.info(f"Найдены удаленные файлы в директории {dir_skan}: {cloud_only}")
         for file_name in cloud_only:
-            print(f"Удаление файла {file_name} из облака")
-            delete = cloud.delete_file_from_cloud(file_name, subdir)
-            if delete:
-                print(f"Файл {file_name} успешно удален из облака")
+            cloud.delete_file_from_cloud(file_name, subdir)
+
 
     if time_diffs:
+        logger.info(f"Найдены обновленные файлы в директории {dir_skan}: {time_diffs}")
         for file_name in time_diffs:
-            print(f"Обновление файла {file_name['name']} в облако из локальной папки {dir_skan}")
+            logger.info(f"Обновление файла {file_name['name']} в облако из локальной папки {dir_skan}")
             upload = cloud.upload_to_cloud(os.path.join(dir_skan, file_name['name']), file_name['name'], subdir)
             if upload:
-                print(f"Файл {file_name} успешно загружен в облако")
-
+                logger.info(f"Файл {file_name['name']} успешно обновлен в облаке")
 
     for dir_name in dirs_only:
         check_folder_and_execution_of_works(os.path.join(dir_skan, dir_name), cloud)
@@ -124,12 +127,18 @@ class CloudController:
             params['path'] = f'/{self.path}/{subdir}'
         response = requests.get(self.url, headers=self.headers, params=params)
         if response.status_code == 200:
+            logger.info(f"Содержимое облачного хранилища по пути {params['path']} успешно получен")
             data = response.json()
             data = data["_embedded"]["items"]
             response = []
             for item in data:
                 response.append({'name': item['name'], 'updated': item['modified']})
             return response
+        elif response.status_code == 404 and response.json()['error'] == 'DiskNotFoundError':
+            logger.info(f"Папка отсутствует, создание папки в облаке.")
+            self.create_folder_in_cloud(subdir)
+        else:
+            logger.error(f"Ошибка при получении содержимого папки {params['path']}: \n Статус код: {response.status_code} \n Описание ошибки: {response.json()}")
 
 
     def upload_to_cloud(self, file_path, filename, subdir=None):
@@ -145,15 +154,15 @@ class CloudController:
         response = requests.get(url, headers=self.headers, params=params)
 
         if response.status_code == 200:
-            pass
+            logger.info(f"Получена ссылка для загрузки файла в облако.")
         elif response.status_code == 409:
-            print("Папка не существует, создание папки в облаке")
+            logger.error(f"Папка отсутствует, создание папки в облаке.")
             if self.create_folder_in_cloud(subdir):
-                print("Папка создана успешно")
+                logger.info("Папка создана успешно")
                 self.upload_to_cloud(file_path, filename, subdir)
                 return True
         else:
-            print(f"Ошибка при загрузке файла: {filename}")
+            logger.error(f"Ошибка при получении ссылки для загрузки файла: \n Статус код: {response.status_code} \n Описание ошибки: {response.json()}")
 
         upload_href = response.json()["href"]
 
@@ -161,7 +170,8 @@ class CloudController:
             upload_response = requests.put(upload_href, files={"file": file})
 
         if upload_response.status_code != 201:
-            raise Exception("Ошибка при загрузке файла в облако")
+            logger.error(f"Ошибка при загрузке файла: {file_path} в облако: \n Статус код: {upload_response.status_code} \n Описание ошибки: {upload_response.json()}")
+            return
 
         return True
 
@@ -175,13 +185,13 @@ class CloudController:
         if subdir is not None:
             params['path'] = f'/{self.path}/{subdir}/{filename}'
 
+        logger.info(f"Удаление файла {filename} из облачного хранилища по пути {params['path']}.")
         response = requests.delete(self.url, headers=self.headers, params=params)
 
         if response.status_code == 204:
-            print(f"Файл {filename} успешно удален из облака")
-            return True
+            logger.info(f"Файл {filename} успешно удален из облака")
         else:
-            print(f"Ошибка при удалении файла: {params['path']}")
+            logger.error(f"Ошибка при удалении файла: {filename} из облачного хранилища по пути {params['path']}: \n Статус код: {response.status_code} \n Описание ошибки: {response.json()}")
 
 
     def create_folder_in_cloud(self, subdir=None):
@@ -208,26 +218,30 @@ class CloudController:
             "limit": 1000,
             "sort": "name"
         }
-
+        logger.info(f"Получение списка содержимого облачного хранилища по пути: {params['path']}.")
         try:
             response = requests.get(self.url, headers=self.headers, params=params)
             if response.status_code == 200:
+                logger.info(f"Содержимое облачного хранилища по пути {params['path']} успешно получен")
                 return response.json().get('_embedded', {}).get('items', [])
+            else:
+                logger.error(f"Ошибка при получении списка содержимого облачного хранилища по пути {params['path']}: \n Статус код: {response.status_code} \n Описание ошибки: {response.json()}")
             return []
         except requests.exceptions.RequestException:
+            logger.error(f"Ошибка при получении списка содержимого облачного хранилища по пути {params['path']}: {requests.exceptions.RequestException}")
             return []
 
 
     def delete_single_folder(self, folder_path):
         """Удаляет пустую папку"""
         params = {"path": f'{self.path}/{folder_path}', "permanently": "true"}
-
+        logger.info(f"Удаление папки {params['path']} из облачного хранилища.")
         response = requests.delete(self.url, headers=self.headers, params=params)
         if response.status_code == 204:
-            print(f"Папка {params['path']} успешно удалена")
+            logger.info(f"Папка {params['path']} успешно удалена")
             return True
         else:
-            print(f"Ошибка при удалении папки: {params['path']}")
+            logger.error(f"Ошибка при удалении папки: {params['path']}: \n Статус код: {response.status_code} \n Описание ошибки: {response.json()}")
 
 
     def delete_folder_iterative(self, folder_path):
