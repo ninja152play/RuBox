@@ -12,13 +12,14 @@ RuBox связывает вашу локальную директорию и д�
 1. ```git clone https://github.com/ninja152play/RuBox.git```
 2. ```cd RuBox```
 3. ```python -m venv venv```
-4. ```pip install -r requirements.txt```
-5. Для Linux ```source venv/bin/activate``` Для Windows ```venv\Scripts\activate.bat```
+4. Для Linux ```source venv/bin/activate``` Для Windows ```venv\Scripts\activate.bat```
+5. ```pip install -r requirements.txt```
 
 Запуск
 ======
 
-```python main.py```
+1. Для Linux ```source venv/bin/activate``` Для Windows ```venv\Scripts\activate.bat```
+2. ```python main.py```
 
 Документация
 ============
